@@ -85,6 +85,7 @@ function TableSkeleton() {
 export default function NatijalarPage() {
   const [rows, setRows] = useState<ApiAttempt[] | null>(null);
   const [xato, setXato] = useState<string | null>(null);
+  const kopFoydalanuvchi = new Set((rows ?? []).map((r) => r.username ?? r.full_name)).size > 1;
 
   useEffect(() => {
     let cancelled = false;
@@ -178,19 +179,22 @@ export default function NatijalarPage() {
         </div>
       ) : (
         <div className="overflow-x-auto rounded-xl border border-zinc-200 bg-white shadow-sm">
+          {/* Oddiy xodim faqat o'z urinishlarini ko'radi — "Foydalanuvchi" ustuni faqat staff uchun */}
           <table className="min-w-full text-left text-sm">
             <thead className="border-b border-zinc-100 bg-zinc-50/80">
               <tr>
                 <th className="px-4 py-3 text-xs font-semibold uppercase tracking-[0.06em] text-zinc-500">
                   Test
                 </th>
-                <th className="px-4 py-3 text-xs font-semibold uppercase tracking-[0.06em] text-zinc-500">
-                  Foydalanuvchi
-                </th>
-                <th className="px-4 py-3 text-xs font-semibold uppercase tracking-[0.06em] text-zinc-500">
+                {kopFoydalanuvchi ? (
+                  <th className="px-4 py-3 text-xs font-semibold uppercase tracking-[0.06em] text-zinc-500">
+                    Foydalanuvchi
+                  </th>
+                ) : null}
+                <th className="hidden px-4 py-3 text-xs font-semibold uppercase tracking-[0.06em] text-zinc-500 sm:table-cell">
                   Yakunlangan / boshlangan
                 </th>
-                <th className="px-4 py-3 text-xs font-semibold uppercase tracking-[0.06em] text-zinc-500">
+                <th className="hidden px-4 py-3 text-xs font-semibold uppercase tracking-[0.06em] text-zinc-500 sm:table-cell">
                   Ball
                 </th>
                 <th className="px-4 py-3 text-xs font-semibold uppercase tracking-[0.06em] text-zinc-500">
@@ -217,13 +221,20 @@ export default function NatijalarPage() {
                   >
                     <td className="px-4 py-3.5 font-medium text-zinc-900">
                       {getAttemptTestTitle(r)}
+                      {finishedIso || startedIso ? (
+                        <p className="mt-0.5 text-xs font-normal tabular-nums text-zinc-500 sm:hidden">
+                          {formatDdMmYyyyHhMm((finishedIso ?? startedIso)!)}
+                        </p>
+                      ) : null}
                     </td>
-                    <td className="px-4 py-3.5 text-zinc-600">
-                      {(typeof r.full_name === "string" && r.full_name.trim()) ||
-                        r.username ||
-                        "—"}
-                    </td>
-                    <td className="px-4 py-3.5 text-zinc-600">
+                    {kopFoydalanuvchi ? (
+                      <td className="px-4 py-3.5 text-zinc-600">
+                        {(typeof r.full_name === "string" && r.full_name.trim()) ||
+                          r.username ||
+                          "—"}
+                      </td>
+                    ) : null}
+                    <td className="hidden px-4 py-3.5 text-zinc-600 sm:table-cell">
                       {finishedIso || startedIso ? (
                         <div className="flex flex-col gap-0.5">
                           {finishedIso ? (
@@ -247,7 +258,7 @@ export default function NatijalarPage() {
                         <span className="text-zinc-400">—</span>
                       )}
                     </td>
-                    <td className="px-4 py-3.5 tabular-nums text-zinc-700">
+                    <td className="hidden px-4 py-3.5 tabular-nums text-zinc-700 sm:table-cell">
                       {rawScore ?? <span className="text-zinc-400">—</span>}
                     </td>
                     <td className="px-4 py-3.5">

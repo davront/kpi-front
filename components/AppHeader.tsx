@@ -97,8 +97,9 @@ export function AppHeader() {
             >
               <BrandLogo size="sm" />
             </Link>
-            <div className="min-w-0">
-              <p className="hidden text-[10px] font-semibold uppercase tracking-[0.18em] text-emerald-400/80 sm:block">
+            {/* Mobil ekranda nav bilan sig'maydi — faqat logo */}
+            <div className="hidden min-w-0 sm:block">
+              <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-emerald-400/80">
                 Agrosanoatni rivojlantirish agentligi
               </p>
               <p className="text-sm font-semibold leading-tight text-white">
