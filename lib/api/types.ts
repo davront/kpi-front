@@ -144,7 +144,10 @@ export type AttemptSessionEventType =
   | "page_hidden"
   | "page_visible"
   | "window_blur"
-  | "window_focus";
+  | "window_focus"
+  | "camera_off"
+  | "screen_off"
+  | "devtools";
 
 export type AttemptSessionEventPayload = {
   event_type: AttemptSessionEventType;
@@ -159,6 +162,8 @@ export type AttemptSessionEventResponse = {
   event_type: AttemptSessionEventType;
   created_at: string;
   attempt_terminated?: boolean;
+  /** Birinchi chiqish: ogohlantirish, keyingisi — to'xtatish */
+  warning?: boolean;
 };
 
 export type ApiErrorBody = {

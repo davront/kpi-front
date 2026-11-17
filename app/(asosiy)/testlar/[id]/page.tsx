@@ -11,10 +11,17 @@ import {
 } from "@/lib/api/attempt-flow";
 import { fetchTestDetail } from "@/lib/api/tests-crud";
 import { useAttemptSessionEvents } from "@/lib/hooks/useAttemptSessionEvents";
-import { useProctoring } from "@/lib/hooks/useProctoring";
+import { screenCaptureSupported, useProctoring } from "@/lib/hooks/useProctoring";
 import { getStoredUserFullName } from "@/lib/auth-storage";
 import { setActiveAttempt, clearActiveAttempt, getActiveAttempt } from "@/components/ActiveAttemptGuard";
+import { Dialog } from "@/components/Dialog";
 import type { ApiAttemptDetail, ApiTestDetail } from "@/lib/api/types";
+
+// Tugmalar: o'lcham (px/flex) chaqiruv joyida qo'shiladi
+const btnBase =
+  "inline-flex items-center justify-center gap-2 rounded-xl py-2.5 text-sm transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 disabled:cursor-not-allowed disabled:opacity-50";
+const btnPrimary = `${btnBase} bg-emerald-700 font-semibold text-white shadow-md shadow-emerald-900/15 hover:bg-emerald-600 focus-visible:outline-emerald-700`;
+const btnSecondary = `${btnBase} border border-zinc-200 bg-white font-medium text-zinc-700 hover:bg-zinc-50 focus-visible:outline-emerald-700`;
 
 function isFinishedAttemptError(message: string): boolean {
   const m = message.toLowerCase();
@@ -101,17 +108,55 @@ export default function TestOtkazishPage() {
   const [terminated, setTerminated] = useState(false);
   const skipFirstSyncRef = useRef(false);
 
-  const { acquireCamera, start: startProctoring, stop: stopProctoring, stream, cameraStatus } = useProctoring();
+  const {
+    acquireCamera, acquireScreen, start: startProctoring, stop: stopProctoring, snapshot,
+    stream, cameraStatus, screenStatus,
+  } = useProctoring();
 
   useEffect(() => {
-    if (timedOut || terminated) stopProctoring();
+    if (timedOut) stopProctoring();
+    if (!terminated) return;
+    // Yakunlovchi qoidabuzarlik surati (1 s dan keyin) olinib ulgurishi uchun
+    const t = setTimeout(stopProctoring, 2000);
+    return () => clearTimeout(t);
   }, [timedOut, terminated, stopProctoring]);
+
+  // Kamera oynasi ochiq: ruxsat berish uchun qulf belgisini bosish chiqish hisoblanmasin
+  const kameraBloklangan =
+    cameraStatus === "denied" || cameraStatus === "unavailable" || cameraStatus === "lost";
+
+  const ekranYoq = screenStatus !== "granted";
+  // Shu urinishda ekran bir marta ulashilgan bo'lsa (F5 dan keyin ham), yo'qolishi — qoidabuzarlik
+  useEffect(() => {
+    if (attemptId && screenStatus === "granted") sessionStorage.setItem(`screen_shared_${attemptId}`, "1");
+  }, [attemptId, screenStatus]);
+  const ekranAvvalUlashilgan =
+    attemptId != null &&
+    (screenStatus === "lost" || sessionStorage.getItem(`screen_shared_${attemptId}`) === "1");
+  const proctorOff =
+    !attemptId || timedOut || terminated ? null
+      : kameraBloklangan ? "camera_off"
+        : ekranYoq && ekranAvvalUlashilgan ? "screen_off"
+          : null;
 
   const { notification, dismissNotification } = useAttemptSessionEvents(attemptId, {
     active: Boolean(attemptId) && !timedOut && !yakunlanmoqda && !terminated,
+    proctorOff,
+    ignoreBlur: kameraBloklangan || ekranYoq,
+    onViolation: (eventType) => {
+      // 1 s dan keyin: ekranda boshqa oyna allaqachon ko'rinadi
+      if (attemptId) setTimeout(() => void snapshot(attemptId, eventType), 1000);
+    },
     onTerminated: () => { clearActiveAttempt(); setTerminated(true); },
     onPageVisible: () => { if (attemptId) void syncAttemptMeta(attemptId); },
   });
+
+  // Davriy suratlar (kamera + ekran) — 30 s da bir
+  useEffect(() => {
+    if (!attemptId || timedOut || terminated) return;
+    const id = setInterval(() => void snapshot(attemptId, "periodic"), 30_000);
+    return () => clearInterval(id);
+  }, [attemptId, timedOut, terminated, snapshot]);
 
   // Server tartibi (har urinish uchun aralashtirilgan) saqlanadi
   const savollar = useMemo(() => test?.questions ?? [], [test]);
@@ -274,6 +319,15 @@ export default function TestOtkazishPage() {
     if (!Number.isFinite(testId) || testId <= 0) return;
     setXato(null);
 
+    // Ekran oynasi birinchi: brauzer uni faqat bosishdan keyin darhol ochadi
+    if (!(await acquireScreen())) {
+      setXato(
+        screenCaptureSupported()
+          ? "Butun ekranni (Entire screen) ulashish kerak."
+          : "Test faqat kompyuterda (Chrome, Edge yoki Firefox) topshiriladi.",
+      );
+      return;
+    }
     const cameraGranted = await acquireCamera();
     if (!cameraGranted) {
       setXato("Kameraga ruxsat berilmadi. Brauzerdagi ruxsat sozlamalarini tekshiring.");
@@ -417,7 +471,7 @@ export default function TestOtkazishPage() {
   }
 
   return (
-    <div className="space-y-5 pb-24 sm:pb-0">
+    <div className="space-y-5">
       {/* ─── Header ─── */}
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
@@ -444,58 +498,55 @@ export default function TestOtkazishPage() {
           ) : null}
         </div>
 
-        <div className="flex shrink-0 flex-wrap items-center gap-2">
-          {qolganSoniya != null && qolganSoniya > 0 && !timedOut ? (
-            <span
-              role="timer"
-              aria-label="Qolgan vaqt"
-              className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-base font-semibold tabular-nums transition-colors duration-700 ${timerClasses[timerUrgency!]}`}
-            >
-              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="h-3.5 w-3.5 shrink-0" aria-hidden>
-                <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm.75-13a.75.75 0 00-1.5 0v5c0 .414.336.75.75.75h4a.75.75 0 000-1.5h-3.25V5z" clipRule="evenodd" />
-              </svg>
-              <span className="text-xs font-medium opacity-80">Qolgan vaqt</span>
-              {Math.floor(qolganSoniya / 60)}:{String(qolganSoniya % 60).padStart(2, "0")}
-            </span>
+      </div>
+
+      {/* ─── Sticky bar: progress + timer ─── */}
+      {attemptId && !yuklanmoqda ? (
+        <div className="sticky top-0 z-30 -mx-4 border-b border-zinc-200 bg-zinc-50/95 px-4 py-3 backdrop-blur">
+          <div className="flex items-center gap-4">
+            <div className="min-w-0 flex-1">
+              <div className="mb-1.5 flex items-center justify-between text-xs">
+                <span className="font-medium text-zinc-500">Javob berilgan</span>
+                <span className="tabular-nums font-semibold text-zinc-700">
+                  {answeredCount} / {totalCount}
+                </span>
+              </div>
+              <div className="h-1.5 w-full overflow-hidden rounded-full bg-zinc-200">
+                <div
+                  className="h-full rounded-full bg-emerald-600 transition-[width] duration-500 ease-out"
+                  style={{ width: `${progressPct}%` }}
+                />
+              </div>
+            </div>
+            {qolganSoniya != null && qolganSoniya > 0 && !timedOut ? (
+              <span
+                role="timer"
+                aria-label="Qolgan vaqt"
+                className={`inline-flex shrink-0 items-center gap-1.5 rounded-lg px-3 py-1.5 text-base font-semibold tabular-nums transition-colors duration-700 ${timerClasses[timerUrgency!]}`}
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="h-3.5 w-3.5 shrink-0" aria-hidden>
+                  <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm.75-13a.75.75 0 00-1.5 0v5c0 .414.336.75.75.75h4a.75.75 0 000-1.5h-3.25V5z" clipRule="evenodd" />
+                </svg>
+                <span className="hidden text-xs font-medium opacity-80 sm:inline">Qolgan vaqt</span>
+                {Math.floor(qolganSoniya / 60)}:{String(qolganSoniya % 60).padStart(2, "0")}
+              </span>
+            ) : null}
+            <CameraPreview stream={stream} />
+          </div>
+          {!timedOut ? (
+            <p className="mt-1.5 text-xs text-amber-800">
+              Boshqa yorliq yoki ilovaga o&apos;tmang: birinchi marta — ogohlantirish, ikkinchisida test to&apos;xtatiladi.
+            </p>
           ) : null}
           <p className="sr-only" aria-live="assertive">
             {qolganSoniya === 300 ? "5 daqiqa qoldi" : qolganSoniya === 60 ? "1 daqiqa qoldi" : ""}
           </p>
         </div>
-      </div>
-
-      {/* ─── Progress bar ─── */}
-      {attemptId && totalCount > 0 && !yuklanmoqda ? (
-        <div>
-          <div className="mb-1.5 flex items-center justify-between text-xs">
-            <span className="font-medium text-zinc-500">Javob berilgan</span>
-            <span className="tabular-nums font-semibold text-zinc-700">
-              {answeredCount} / {totalCount}
-            </span>
-          </div>
-          <div className="h-1.5 w-full overflow-hidden rounded-full bg-zinc-100">
-            <div
-              className="h-full rounded-full bg-emerald-500 transition-[width] duration-500 ease-out"
-              style={{ width: `${progressPct}%` }}
-            />
-          </div>
-          <p className="mt-2 text-sm text-zinc-500">
-            Yakunlashdan oldin istalgan savolga qaytib, javobni o&apos;zgartirishingiz mumkin.
-          </p>
-        </div>
       ) : null}
-
-      {/* ─── Warning banner ─── */}
-      {attemptId && !timedOut && !yakunlanmoqda ? (
-        <div className="flex gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm">
-          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="mt-0.5 h-4 w-4 shrink-0 text-amber-500" aria-hidden>
-            <path fillRule="evenodd" d="M8.485 2.495c.673-1.167 2.357-1.167 3.03 0l6.28 10.875c.673 1.167-.17 2.625-1.516 2.625H3.72c-1.347 0-2.189-1.458-1.515-2.625L8.485 2.495zM10 5a.75.75 0 01.75.75v3.5a.75.75 0 01-1.5 0v-3.5A.75.75 0 0110 5zm0 9a1 1 0 100-2 1 1 0 000 2z" clipRule="evenodd" />
-          </svg>
-          <p className="text-amber-900">
-            <span className="font-semibold">Diqqat:</span>{" "}
-            test davomida boshqa yorliqqa yoki ilovaga o&apos;tish natijangizga ta&apos;sir qiladi.
-          </p>
-        </div>
+      {attemptId && !yuklanmoqda && !timedOut ? (
+        <p className="text-sm text-zinc-500">
+          Yakunlashdan oldin istalgan savolga qaytib, javobni o&apos;zgartirishingiz mumkin.
+        </p>
       ) : null}
 
       {/* ─── Timed out ─── */}
@@ -548,11 +599,21 @@ export default function TestOtkazishPage() {
           <p className="mt-1.5 text-sm text-zinc-500">
             &quot;Boshlash&quot; tugmasini bossangiz, vaqt hisobi boshlanadi.
           </p>
+          <div className="mx-auto mt-5 flex max-w-md gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-left text-sm">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" aria-hidden>
+              <path fillRule="evenodd" d="M8.485 2.495c.673-1.167 2.357-1.167 3.03 0l6.28 10.875c.673 1.167-.17 2.625-1.516 2.625H3.72c-1.347 0-2.189-1.458-1.515-2.625L8.485 2.495zM10 5a.75.75 0 01.75.75v3.5a.75.75 0 01-1.5 0v-3.5A.75.75 0 0110 5zm0 9a1 1 0 100-2 1 1 0 000 2z" clipRule="evenodd" />
+            </svg>
+            <p className="text-amber-900">
+              Test davomida kamera yoqiladi va butun ekran ulashiladi, suratlar saqlanadi.
+              Boshqa yorliq/ilovaga o&apos;tish, kamera yoki ekranni o&apos;chirish, sahifani yangilash, DevTools —
+              birinchi marta ogohlantirish, ikkinchisida test to&apos;xtatiladi va ball hisoblanmaydi.
+            </p>
+          </div>
           <button
             type="button"
             onClick={() => void boshlash()}
             disabled={yuklanmoqda || cameraStatus === "pending"}
-            className="mt-6 inline-flex items-center gap-2 rounded-xl bg-emerald-700 px-8 py-2.5 text-sm font-semibold text-white shadow-md shadow-emerald-900/15 transition hover:bg-emerald-600 disabled:cursor-not-allowed disabled:opacity-60 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-700"
+            className={`${btnPrimary} mt-6 px-8`}
           >
             {cameraStatus === "pending" ? (
               <>
@@ -568,6 +629,12 @@ export default function TestOtkazishPage() {
               "Boshlash"
             )}
           </button>
+        </div>
+      ) : (cameraStatus !== "granted" || ekranYoq) && !timedOut && !terminated ? (
+        // Kamera va ekran ishlamaguncha savollar ko'rsatilmaydi: oyna ortidan javob qidirib bo'lmasin
+        <div className="flex items-center justify-center gap-2 rounded-xl border border-zinc-200 bg-white px-6 py-10 text-sm text-zinc-500 shadow-sm">
+          <Spinner className="h-4 w-4" />
+          Savollar kamera va ekran ulangandan keyin ko&apos;rsatiladi…
         </div>
       ) : savollar.length === 0 ? (
         <div className="rounded-xl border border-zinc-200 bg-white px-6 py-10 text-center shadow-sm">
@@ -650,7 +717,7 @@ export default function TestOtkazishPage() {
                   type="button"
                   onClick={() => savolgaOtish(-1)}
                   disabled={joriyIdx <= 0}
-                  className="rounded-xl border border-zinc-200 px-4 py-2.5 text-sm font-medium text-zinc-700 transition hover:bg-zinc-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
+                  className={`${btnSecondary} px-4`}
                 >
                   Oldingi savol
                 </button>
@@ -658,7 +725,7 @@ export default function TestOtkazishPage() {
                   <button
                     type="button"
                     onClick={() => savolgaOtish(1)}
-                    className="rounded-xl bg-emerald-700 px-5 py-2.5 text-sm font-semibold text-white shadow-md shadow-emerald-900/15 transition hover:bg-emerald-600 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-700"
+                    className={`${btnPrimary} px-5`}
                   >
                     Keyingi savol
                   </button>
@@ -667,7 +734,7 @@ export default function TestOtkazishPage() {
                     type="button"
                     onClick={yakunlashniOchish}
                     disabled={timedOut || !attemptId || yuborilmoqda != null}
-                    className="rounded-xl bg-emerald-700 px-5 py-2.5 text-sm font-semibold text-white shadow-md shadow-emerald-900/15 transition hover:bg-emerald-600 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
+                    className={`${btnPrimary} px-5`}
                   >
                     Javoblarni ko&apos;rib chiqish
                   </button>
@@ -691,7 +758,7 @@ export default function TestOtkazishPage() {
                 type="button"
                 disabled={timedOut || yakunlanmoqda || !attemptId || yuborilmoqda != null}
                 onClick={yakunlashniOchish}
-                className="inline-flex items-center gap-2 rounded-xl bg-emerald-700 px-5 py-2.5 text-sm font-semibold text-white shadow-md shadow-emerald-900/15 transition hover:bg-emerald-600 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
+                className={`${btnPrimary} px-5`}
               >
                 Testni yakunlash
               </button>
@@ -702,45 +769,46 @@ export default function TestOtkazishPage() {
 
       {/* ─── Notification modal ─── */}
       {notification ? (
-        <div
-          role="alert"
-          aria-live="assertive"
-          className="fixed inset-0 z-50 flex items-center justify-center bg-zinc-950/40 p-4 backdrop-blur-[2px]"
-        >
-          <div className="flex w-full max-w-sm flex-col items-center gap-4 rounded-2xl border border-amber-200 bg-white px-6 py-7 text-center shadow-2xl">
+        <Dialog role="alertdialog" labelledBy="notif-title" className="border-amber-200">
+          <div className="flex flex-col items-center gap-4 px-6 py-7 text-center">
             <div className="flex h-12 w-12 items-center justify-center rounded-full bg-amber-100">
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="h-6 w-6 text-amber-500" aria-hidden>
                 <path fillRule="evenodd" d="M9.401 3.003c1.155-2 4.043-2 5.197 0l7.355 12.748c1.154 2-.29 4.5-2.598 4.5H4.645c-2.309 0-3.752-2.5-2.598-4.5L9.4 3.003zM12 8.25a.75.75 0 01.75.75v3.75a.75.75 0 01-1.5 0V9a.75.75 0 01.75-.75zm0 8.25a1 1 0 100-2 1 1 0 000 2z" clipRule="evenodd" />
               </svg>
             </div>
             <div>
-              <p className="text-base font-semibold text-zinc-900">
-                {notification.eventType === "page_visible"
+              <p id="notif-title" className="text-base font-semibold text-zinc-900">
+                {notification.eventType === "page_hidden"
                   ? "Boshqa yorliqqa o'tildi"
-                  : "Boshqa ilova ochildi"}
+                  : notification.eventType === "camera_off"
+                    ? "Kamera o'chirildi"
+                    : notification.eventType === "screen_off"
+                      ? "Ekran ulashish to'xtatildi"
+                      : notification.eventType === "devtools"
+                        ? "DevTools ochishga urinish"
+                        : "Boshqa ilova ochildi"}
               </p>
-              <p className="mt-1.5 text-sm text-zinc-500">{notification.message}</p>
+              <p className="mt-1.5 text-sm text-zinc-500">
+                Bu birinchi ogohlantirish. Yana boshqa yorliq yoki ilovaga o&apos;tsangiz, kamera yoki
+                ekran ulashishni o&apos;chirsangiz, test to&apos;xtatiladi va ball hisoblanmaydi.
+              </p>
             </div>
             <button
               type="button"
+              data-autofocus
               onClick={dismissNotification}
               className="w-full rounded-xl bg-amber-500 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-amber-600 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber-500"
             >
-              Tushunarli
+              Tushundim
             </button>
           </div>
-        </div>
+        </Dialog>
       ) : null}
 
-      {/* ─── Terminated modal ─── */}
+      {/* ─── Terminated modal (yopib bo'lmaydi) ─── */}
       {terminated ? (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-zinc-950/60 p-4 backdrop-blur-[2px]"
-          role="alertdialog"
-          aria-modal="true"
-          aria-labelledby="terminated-title"
-        >
-          <div className="flex w-full max-w-sm flex-col items-center gap-5 rounded-2xl border border-red-100 bg-white px-6 py-8 text-center shadow-2xl">
+        <Dialog role="alertdialog" labelledBy="terminated-title" className="border-red-100">
+          <div className="flex flex-col items-center gap-5 px-6 py-8 text-center">
             <div className="flex h-16 w-16 items-center justify-center rounded-full bg-red-100">
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="h-8 w-8 text-red-500" aria-hidden>
                 <path fillRule="evenodd" d="M12 2.25c-5.385 0-9.75 4.365-9.75 9.75s4.365 9.75 9.75 9.75 9.75-4.365 9.75-9.75S17.385 2.25 12 2.25zm-1.72 6.97a.75.75 0 10-1.06 1.06L10.94 12l-1.72 1.72a.75.75 0 101.06 1.06L12 13.06l1.72 1.72a.75.75 0 101.06-1.06L13.06 12l1.72-1.72a.75.75 0 10-1.06-1.06L12 10.94l-1.72-1.72z" clipRule="evenodd" />
@@ -751,31 +819,89 @@ export default function TestOtkazishPage() {
                 Test to&apos;xtatildi
               </p>
               <p className="mt-2 text-sm leading-relaxed text-zinc-500">
-                Boshqa yorliq yoki ilova ochilganligi sababli urinish avtomatik yakunlandi.
+                Ogohlantirishdan keyin qoida yana buzildi (boshqa yorliq, ilova, kamera yoki ekran ulashish) — urinish avtomatik yakunlandi.
                 Ball hisoblanmaydi.
               </p>
             </div>
             <button
               type="button"
+              data-autofocus
               onClick={() => router.replace("/natijalar")}
               className="w-full rounded-xl bg-zinc-900 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-zinc-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-zinc-700"
             >
               Natijalarni ko&apos;rish
             </button>
           </div>
-        </div>
+        </Dialog>
+      ) : null}
+
+      {/* ─── Kamera yo'q — test bloklanadi (yopib bo'lmaydi) ─── */}
+      {attemptId && !timedOut && !terminated && kameraBloklangan ? (
+        <Dialog role="alertdialog" labelledBy="camera-title" className="border-red-100">
+          <div className="flex flex-col items-center gap-4 px-6 py-7 text-center">
+            <div>
+              <p id="camera-title" className="text-base font-semibold text-zinc-900">
+                {cameraStatus === "lost" ? "Kamera o'chib qoldi" : "Kamera yoqilmagan"}
+              </p>
+              <p className="mt-1.5 text-sm text-zinc-500">
+                {cameraStatus === "denied"
+                  ? "Manzil satridagi qulf belgisini bosib, kameraga ruxsat bering, so'ng tugmani bosing. Boshqa yorliq ochmang."
+                  : "Kamera ulanganini va boshqa dastur ishlatmayotganini tekshiring."}{" "}
+                Kamerasiz testni davom ettirib bo&apos;lmaydi, vaqt esa ketmoqda.
+              </p>
+            </div>
+            <button
+              type="button"
+              data-autofocus
+              onClick={() => void startProctoring(attemptId)}
+              className="w-full rounded-xl bg-zinc-900 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-zinc-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-zinc-700"
+            >
+              Kamerani yoqish
+            </button>
+          </div>
+        </Dialog>
+      ) : null}
+
+      {/* ─── Ekran ulashilmagan — test bloklanadi (yopib bo'lmaydi) ─── */}
+      {attemptId && !timedOut && !terminated && !kameraBloklangan && ekranYoq ? (
+        <Dialog role="alertdialog" labelledBy="screen-title" className="border-red-100">
+          <div className="flex flex-col items-center gap-4 px-6 py-7 text-center">
+            <div>
+              <p id="screen-title" className="text-base font-semibold text-zinc-900">
+                {screenStatus === "unsupported" ? "Kompyuter kerak" : "Ekranni ulashing"}
+              </p>
+              <p className="mt-1.5 text-sm text-zinc-500">
+                {screenStatus === "unsupported"
+                  ? "Bu brauzer ekranni ulasha olmaydi. Testni kompyuterda Chrome, Edge yoki Firefox orqali oching."
+                  : screenStatus === "wrong"
+                    ? "Oyna yoki yorliq emas — «Butun ekran» (Entire screen) ni tanlang."
+                    : "Test davomida butun ekran ulashilishi kerak. Tugmani bosing va «Butun ekran» (Entire screen) ni tanlang."}
+              </p>
+            </div>
+            {screenStatus !== "unsupported" ? (
+              <button
+                type="button"
+                data-autofocus
+                disabled={screenStatus === "pending"}
+                onClick={() => void acquireScreen()}
+                className="w-full rounded-xl bg-zinc-900 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-zinc-700 disabled:opacity-60 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-zinc-700"
+              >
+                Ekranni ulashish
+              </button>
+            ) : null}
+          </div>
+        </Dialog>
       ) : null}
 
       {/* ─── Finish modal ─── */}
       {yakunlashModal ? (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-zinc-950/50 p-4 backdrop-blur-[2px]"
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="yakunlash-modal-title"
-          onKeyDown={(e) => { if (e.key === "Escape" && !yakunlanmoqda) setYakunlashModal(false); }}
+        <Dialog
+          onClose={() => { if (!yakunlanmoqda) setYakunlashModal(false); }}
+          closeOnBackdrop
+          labelledBy="yakunlash-modal-title"
+          className="border-zinc-200"
         >
-          <div className="w-full max-w-sm rounded-2xl border border-zinc-200 bg-white p-6 shadow-2xl">
+          <div className="p-6">
             <h3 id="yakunlash-modal-title" className="text-lg font-semibold text-zinc-900">
               Testni yakunlaysizmi?
             </h3>
@@ -809,10 +935,10 @@ export default function TestOtkazishPage() {
             <div className="mt-5 flex gap-2.5">
               <button
                 type="button"
-                autoFocus
+                data-autofocus
                 disabled={yakunlanmoqda}
                 onClick={() => setYakunlashModal(false)}
-                className="flex-1 rounded-xl border border-zinc-200 px-4 py-2.5 text-sm font-medium text-zinc-700 transition hover:bg-zinc-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-700 disabled:opacity-50"
+                className={`${btnSecondary} flex-1 px-4`}
               >
                 Testga qaytish
               </button>
@@ -820,7 +946,7 @@ export default function TestOtkazishPage() {
                 type="button"
                 disabled={yakunlanmoqda || timedOut || yuborilmoqda != null}
                 onClick={() => void yakunlash()}
-                className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-emerald-700 px-4 py-2.5 text-sm font-semibold text-white shadow-md shadow-emerald-900/15 transition hover:bg-emerald-600 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
+                className={`${btnPrimary} flex-1 px-4`}
               >
                 {yakunlanmoqda ? (
                   <>
@@ -833,10 +959,9 @@ export default function TestOtkazishPage() {
               </button>
             </div>
           </div>
-        </div>
+        </Dialog>
       ) : null}
 
-      <CameraPreview stream={stream} />
     </div>
   );
 }
@@ -858,18 +983,16 @@ function CameraPreview({ stream }: { stream: MediaStream | null }) {
   if (!stream) return null;
 
   return (
-    <div className="fixed bottom-3 right-3 z-20 overflow-hidden rounded-xl shadow-lg ring-1 ring-zinc-900/10 sm:bottom-4 sm:right-4">
+    // Sticky panelda kichik ko'rinish: hech qaysi tugmani yopmaydi
+    <div className="relative shrink-0 overflow-hidden rounded-lg ring-1 ring-zinc-900/10">
       <video
         ref={videoRef}
         muted
         playsInline
-        className="h-20 w-28 object-cover bg-zinc-900 sm:h-28 sm:w-40"
+        className="h-11 w-14 bg-zinc-900 object-cover sm:h-12 sm:w-16"
         aria-label="Kamera ko'rinishi"
       />
-      <span className="absolute bottom-1 left-1 inline-flex items-center gap-1 rounded bg-zinc-900/60 px-1.5 py-0.5 text-[11px] font-medium text-white">
-        <span className="h-1.5 w-1.5 rounded-full bg-red-500" aria-hidden />
-        Kamera
-      </span>
+      <span className="absolute left-1 top-1 h-1.5 w-1.5 rounded-full bg-red-500 ring-1 ring-white/70" aria-hidden />
     </div>
   );
 }

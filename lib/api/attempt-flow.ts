@@ -3,6 +3,7 @@ import { singleFlight } from "@/lib/api/request-single-flight";
 import type {
   ApiAttemptDetail,
   AttemptSessionEventPayload,
+  AttemptSessionEventResponse,
 } from "@/lib/api/types";
 
 /** POST /api/tests/<id>/attempts/ */
@@ -61,11 +62,29 @@ export async function abandonAttempt(attemptId: number): Promise<void> {
 }
 
 /** POST /api/attempts/<id>/events/ — telemetriya; attempt_terminated ni qaytarishi mumkin */
+/** POST /api/attempts/<id>/snapshots/ — JPEG, multipart. Xato bo'lsa jim (test to'xtamasin). */
+export async function postAttemptSnapshot(
+  attemptId: number,
+  kind: "camera" | "screen",
+  reason: string,
+  image: Blob,
+): Promise<void> {
+  const body = new FormData();
+  body.append("kind", kind);
+  body.append("reason", reason);
+  body.append("image", image, `${kind}.jpg`);
+  try {
+    await apiFetch(`/api/attempts/${attemptId}/snapshots/`, { method: "POST", body });
+  } catch (err) {
+    console.warn("[snapshot] upload failed:", err);
+  }
+}
+
 export async function postAttemptSessionEvent(
   attemptId: number,
   body: AttemptSessionEventPayload,
   { keepalive = false }: { keepalive?: boolean } = {},
-): Promise<{ terminated: boolean }> {
+): Promise<{ terminated: boolean; warning: boolean }> {
   try {
     const res = await apiFetch(`/api/attempts/${attemptId}/events/`, {
       method: "POST",
@@ -78,15 +97,15 @@ export async function postAttemptSessionEvent(
       keepalive,
     });
     console.log("[postAttemptSessionEvent] status:", res.status, "url:", res.url);
-    if (!res.ok) return { terminated: false };
+    if (!res.ok) return { terminated: false, warning: false };
     const ct = res.headers.get("content-type");
     if (ct?.includes("application/json")) {
-      const data = (await res.json()) as { attempt_terminated?: boolean };
+      const data = (await res.json()) as AttemptSessionEventResponse;
       console.log("[postAttemptSessionEvent] response body:", data);
-      return { terminated: Boolean(data?.attempt_terminated) };
+      return { terminated: Boolean(data?.attempt_terminated), warning: Boolean(data?.warning) };
     }
-    return { terminated: false };
+    return { terminated: false, warning: false };
   } catch {
-    return { terminated: false };
+    return { terminated: false, warning: false };
   }
 }

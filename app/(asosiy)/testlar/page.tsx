@@ -8,6 +8,8 @@ import { fetchTests } from "@/lib/api/tests";
 import type { ApiTest } from "@/lib/api/types";
 import { formatDdMmYyyy } from "@/lib/format-date";
 import { getStoredUserFullName } from "@/lib/auth-storage";
+import { Dialog } from "@/components/Dialog";
+import { screenCaptureSupported } from "@/lib/hooks/useProctoring";
 
 type TooltipMeta = {
   savollar: number | null;
@@ -143,6 +145,12 @@ export default function TestlarPage() {
   async function modalBoshlash() {
     if (activeTooltipId == null) return;
     setModalXato(null);
+
+    // 0. Ekran ulashish faqat kompyuter brauzerida — telefonda urinish boshlanmasin
+    if (!screenCaptureSupported()) {
+      setModalXato("Test faqat kompyuterda (Chrome, Edge yoki Firefox) topshiriladi.");
+      return;
+    }
 
     // 1. Запросить камеру
     setCameraStatus("pending");
@@ -319,22 +327,19 @@ export default function TestlarPage() {
       )}
 
       {activeTooltipId != null ? (
-        <div
-          className="fixed inset-0 z-40 flex items-center justify-center bg-zinc-950/40 p-4 backdrop-blur-[2px]"
-          onClick={() => { setActiveTooltipId(null); setModalXato(null); }}
+        <Dialog
+          onClose={() => { setActiveTooltipId(null); setModalXato(null); }}
+          closeOnBackdrop
+          labelledBy="boshlash-modal-title"
+          className="border-zinc-200"
         >
-          <div
-            role="dialog"
-            aria-modal="true"
-            className="w-full max-w-sm rounded-2xl border border-zinc-200 bg-white p-6 shadow-2xl shadow-zinc-900/20"
-            onClick={(e) => e.stopPropagation()}
-          >
+          <div className="p-6">
             {userFullName ? (
               <p className="mt-1 text-sm text-zinc-500">
                 <span className="font-semibold text-zinc-800">{userFullName}</span>, siz quyidagi testni boshlashga tayyormisiz?
               </p>
             ) : null}
-            <h3 className="mt-1 text-lg font-bold tracking-tight text-zinc-900">
+            <h3 id="boshlash-modal-title" className="mt-1 text-lg font-bold tracking-tight text-zinc-900">
               {activeTest?.title ?? "Test"}
             </h3>
 
@@ -362,6 +367,10 @@ export default function TestlarPage() {
               </div>
             </div>
 
+            <p className="mt-3 text-xs leading-relaxed text-amber-800">
+              Test davomida kamera yoqiladi va butun ekran ulashiladi, suratlar saqlanadi. Qoidabuzarlik: birinchi marta — ogohlantirish, ikkinchisida test to&apos;xtatiladi.
+            </p>
+
             {modalXato ? (
               <div className="mt-3 flex gap-2.5 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-900">
                 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="mt-0.5 h-3.5 w-3.5 shrink-0 text-red-500" aria-hidden>
@@ -374,6 +383,7 @@ export default function TestlarPage() {
             <div className="mt-5 flex gap-2">
               <button
                 type="button"
+                data-autofocus
                 onClick={() => { setActiveTooltipId(null); setModalXato(null); }}
                 className="rounded-xl border border-zinc-200 px-4 py-2.5 text-sm font-medium text-zinc-700 transition hover:bg-zinc-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-zinc-400"
               >
@@ -407,7 +417,7 @@ export default function TestlarPage() {
               </button>
             </div>
           </div>
-        </div>
+        </Dialog>
       ) : null}
     </div>
   );
