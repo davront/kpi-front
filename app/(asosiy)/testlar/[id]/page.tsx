@@ -14,7 +14,7 @@ import { useAttemptSessionEvents } from "@/lib/hooks/useAttemptSessionEvents";
 import { useProctoring } from "@/lib/hooks/useProctoring";
 import { getStoredUserFullName } from "@/lib/auth-storage";
 import { setActiveAttempt, clearActiveAttempt, getActiveAttempt } from "@/components/ActiveAttemptGuard";
-import type { ApiAttemptDetail, ApiTestDetail, ApiTestQuestionDetail } from "@/lib/api/types";
+import type { ApiAttemptDetail, ApiTestDetail } from "@/lib/api/types";
 
 function isFinishedAttemptError(message: string): boolean {
   const m = message.toLowerCase();
@@ -91,14 +91,13 @@ export default function TestOtkazishPage() {
   const [xato, setXato] = useState<string | null>(null);
   const [yakunlanganUrinishXatosi, setYakunlanganUrinishXatosi] = useState(false);
   const [tanlangan, setTanlangan] = useState<Record<number, number>>({});
-  const [draftTanlov, setDraftTanlov] = useState<Record<number, number>>({});
   const [answeredIds, setAnsweredIds] = useState<number[]>([]);
   const [currentQuestionId, setCurrentQuestionId] = useState<number | null>(null);
   const [questionsTotal, setQuestionsTotal] = useState<number | null>(null);
   const [questionsAnswered, setQuestionsAnswered] = useState<number | null>(null);
   const [yuborilmoqda, setYuborilmoqda] = useState<number | null>(null);
   const [yakunlanmoqda, setYakunlanmoqda] = useState(false);
-  const [chiqishModal, setChiqishModal] = useState(false);
+  const [yakunlashModal, setYakunlashModal] = useState(false);
   const [terminated, setTerminated] = useState(false);
   const skipFirstSyncRef = useRef(false);
 
@@ -110,16 +109,12 @@ export default function TestOtkazishPage() {
 
   const { notification, dismissNotification } = useAttemptSessionEvents(attemptId, {
     active: Boolean(attemptId) && !timedOut && !yakunlanmoqda && !terminated,
-    onTerminated: () => setTerminated(true),
+    onTerminated: () => { clearActiveAttempt(); setTerminated(true); },
     onPageVisible: () => { if (attemptId) void syncAttemptMeta(attemptId); },
   });
 
-  const savollar = useMemo(() => {
-    if (!test?.questions?.length) return [];
-    return [...test.questions].sort(
-      (a, b) => (a.order ?? a.id) - (b.order ?? b.id),
-    );
-  }, [test]);
+  // Server tartibi (har urinish uchun aralashtirilgan) saqlanadi
+  const savollar = useMemo(() => test?.questions ?? [], [test]);
 
   // Восстановить позицию: первый незаявленный вопрос после загрузки попытки
   const positionRestoredRef = useRef(false);
@@ -133,9 +128,15 @@ export default function TestOtkazishPage() {
     setCurrentQuestionId(next?.id ?? savollar[savollar.length - 1].id);
   }, [attemptId, savollar, answeredIds, currentQuestionId]);
 
-  const applyAttemptSnapshot = useCallback((d: ApiAttemptDetail) => {
-    // deadline_at предпочтительнее seconds_remaining — точнее при неактивной вкладке
-    const deadlineMs_ = d.deadline_at ? new Date(d.deadline_at).getTime() - Date.now() : null;
+  // Har bir javob saqlash boshida/oxirida oshadi: eski fon-sync yangi javobni bosib ketmasin
+  const saqlashSeqRef = useRef(0);
+
+  const applyAttemptSnapshot = useCallback((d: ApiAttemptDetail, { javoblarsiz = false } = {}) => {
+    // deadline_at + server_time: qolgan vaqt server soati bo'yicha (mijoz soati noto'g'ri bo'lishi mumkin)
+    const serverNow = d.server_time ? new Date(d.server_time).getTime() : NaN;
+    const deadlineMs_ = d.deadline_at
+      ? new Date(d.deadline_at).getTime() - (Number.isFinite(serverNow) ? serverNow : Date.now())
+      : null;
     if (deadlineMs_ !== null && Number.isFinite(deadlineMs_)) {
       if (deadlineMs_ <= 0) {
         setDeadlineMs(null);
@@ -155,7 +156,7 @@ export default function TestOtkazishPage() {
     if (typeof d.questions_total === "number") setQuestionsTotal(d.questions_total);
     if (typeof d.questions_answered === "number") setQuestionsAnswered(d.questions_answered);
     if (Array.isArray(d.answered_question_ids)) setAnsweredIds(d.answered_question_ids);
-    if (Array.isArray(d.responses)) {
+    if (!javoblarsiz && Array.isArray(d.responses)) {
       const map: Record<number, number> = {};
       for (const r of d.responses) {
         if (typeof r.question_id === "number" && typeof r.selected_option_id === "number") {
@@ -168,8 +169,9 @@ export default function TestOtkazishPage() {
 
   const syncAttemptMeta = useCallback(async (aid: number) => {
     try {
+      const seq = saqlashSeqRef.current;
       const d = await fetchAttemptDetail(aid);
-      applyAttemptSnapshot(d);
+      applyAttemptSnapshot(d, { javoblarsiz: seq !== saqlashSeqRef.current });
       const st = String(d.status ?? "").toLowerCase();
       console.log("[syncAttemptMeta] status:", d.status);
       if (st.includes("terminat")) {
@@ -177,7 +179,7 @@ export default function TestOtkazishPage() {
         setTerminated(true);
         return;
       }
-      if (st.includes("complete") || st.includes("abandon") || st === "done") {
+      if (st.includes("complete") || st.includes("abandon") || st === "timed_out" || st === "done") {
         clearActiveAttempt();
         router.replace("/natijalar");
       }
@@ -281,6 +283,8 @@ export default function TestOtkazishPage() {
     setYuklanmoqda(true);
     try {
       const att = await startAttempt(testId);
+      // Savollar urinish ketma-ketligi bo'yicha qayta yuklanadi
+      setTest(await fetchTestDetail(testId));
       skipFirstSyncRef.current = true;
       setAttemptId(att.id);
       applyAttemptSnapshot(att);
@@ -308,12 +312,40 @@ export default function TestOtkazishPage() {
     return () => { cancelled = true; clearInterval(t); };
   }, [attemptId, timedOut, syncAttemptMeta]);
 
-  function variantTanlash(savolId: number, variantId: number) {
-    if (timedOut || yuklanmoqda) return;
-    setDraftTanlov((prev) => ({ ...prev, [savolId]: variantId }));
+  const [saqlashXatosi, setSaqlashXatosi] = useState<number | null>(null);
+
+  // Javob tanlanganda darhol saqlanadi: vaqt tugasa ham yo'qolmaydi. Yakunlashgacha o'zgartirish mumkin.
+  async function variantTanlash(savolId: number, variantId: number) {
+    if (!attemptId || timedOut || yuklanmoqda || yuborilmoqda != null) return;
+    const oldingi = tanlangan[savolId];
+    setTanlangan((prev) => ({ ...prev, [savolId]: variantId }));
+    setYuborilmoqda(savolId);
+    setSaqlashXatosi(null);
+    setXato(null);
+    saqlashSeqRef.current += 1;
+    try {
+      const snap = await submitAnswer(attemptId, savolId, variantId);
+      if (snap) applyAttemptSnapshot(snap);
+    } catch (e) {
+      setTanlangan((prev) => {
+        const next = { ...prev };
+        if (oldingi == null) delete next[savolId];
+        else next[savolId] = oldingi;
+        return next;
+      });
+      setSaqlashXatosi(savolId);
+      setXato(e instanceof Error ? e.message : "Javobni saqlab bo'lmadi.");
+      void syncAttemptMeta(attemptId);
+    } finally {
+      saqlashSeqRef.current += 1;
+      setYuborilmoqda(null);
+    }
   }
 
-  const savolIds = useMemo(() => savollar.map((q) => q.id), [savollar]);
+  function yakunlashniOchish() {
+    setXato(null);
+    setYakunlashModal(true);
+  }
 
   const joriySavol = useMemo(() => {
     if (currentQuestionId != null) {
@@ -323,91 +355,33 @@ export default function TestOtkazishPage() {
     return savollar[0] ?? null;
   }, [currentQuestionId, savollar]);
 
-  const joriyTanlov =
-    joriySavol == null
-      ? null
-      : draftTanlov[joriySavol.id] ?? tanlangan[joriySavol.id] ?? null;
+  const joriyIdx = joriySavol ? savollar.findIndex((q) => q.id === joriySavol.id) : -1;
+  const joriyTanlov = joriySavol == null ? null : tanlangan[joriySavol.id] ?? null;
+  const javobsizlar = savollar
+    .map((q, idx) => ({ id: q.id, raqam: idx + 1 }))
+    .filter((q) => tanlangan[q.id] == null);
 
-  const isLastQuestion =
-    joriySavol != null &&
-    (questionsTotal != null && questionsAnswered != null
-      ? questionsAnswered + 1 >= questionsTotal
-      : answeredIds.length + 1 >= savollar.length);
-
-  const barchaJavoblangan =
-    savollar.length > 0 &&
-    savollar.every((q) => (draftTanlov[q.id] ?? tanlangan[q.id]) != null);
-
-  function moveToNextQuestion() {
-    if (!joriySavol || !savolIds.length) return;
-    const idx = savolIds.indexOf(joriySavol.id);
-    if (idx < 0 || idx === savolIds.length - 1) return;
-    setCurrentQuestionId(savolIds[idx + 1]);
+  function savolgaOtish(delta: number) {
+    const q = savollar[joriyIdx + delta];
+    if (q) setCurrentQuestionId(q.id);
   }
 
-  async function keyingiSavol() {
-    if (!attemptId || !joriySavol || timedOut) return;
-    if (joriyTanlov == null) { moveToNextQuestion(); return; }
-    if (tanlangan[joriySavol.id] === joriyTanlov) { moveToNextQuestion(); return; }
-    setYuborilmoqda(joriySavol.id);
-    setXato(null);
-    try {
-      const snap = await submitAnswer(attemptId, joriySavol.id, joriyTanlov);
-      if (snap) {
-        applyAttemptSnapshot(snap);
-        const st = String(snap.status ?? "").toLowerCase();
-        if (st.length > 0 && !st.includes("in_progress") && !st.includes("progress")) {
-          clearActiveAttempt();
-          router.replace("/natijalar");
-          return;
-        }
-      }
-      setTanlangan((prev) => ({ ...prev, [joriySavol.id]: joriyTanlov }));
-      setDraftTanlov((prev) => { const next = { ...prev }; delete next[joriySavol.id]; return next; });
-      await syncAttemptMeta(attemptId);
-      moveToNextQuestion();
-    } catch (e) {
-      setXato(e instanceof Error ? e.message : "Javobni saqlab bo'lmadi.");
-    } finally {
-      setYuborilmoqda(null);
-    }
-  }
-
-  async function yakunlashHozirgiJavoblarBilan(variant: "barcha" | "istalgan") {
-    if (!attemptId || timedOut) return;
-    if (variant === "barcha" && !barchaJavoblangan) return;
+  async function yakunlash() {
+    // Saqlanayotgan javob complete'dan oldin serverga yetib borishi shart
+    if (!attemptId || timedOut || yuborilmoqda != null) return;
     setYakunlanmoqda(true);
     setXato(null);
     try {
-      const pending = savollar
-        .map((q) => {
-          const selected = draftTanlov[q.id] ?? tanlangan[q.id];
-          if (selected == null) return null;
-          if (tanlangan[q.id] === selected) return null;
-          return { questionId: q.id, optionId: selected };
-        })
-        .filter((v): v is { questionId: number; optionId: number } => v != null);
-      for (const p of pending) await submitAnswer(attemptId, p.questionId, p.optionId);
       await completeAttempt(attemptId);
       stopProctoring();
       clearActiveAttempt();
-      setChiqishModal(false);
+      setYakunlashModal(false);
       router.replace("/natijalar");
     } catch (e) {
       setXato(e instanceof Error ? e.message : "Testni yakunlab bo'lmadi.");
     } finally {
       setYakunlanmoqda(false);
     }
-  }
-
-  async function yakunlash() {
-    await yakunlashHozirgiJavoblarBilan("barcha");
-  }
-
-  function chiqishniBoshlash() {
-    if (!attemptId) { router.push("/testlar"); return; }
-    if (timedOut) { router.replace("/natijalar"); return; }
-    setChiqishModal(true);
   }
 
   const qolganSoniya =
@@ -422,12 +396,14 @@ export default function TestOtkazishPage() {
   const timerClasses: Record<"ok" | "warning" | "critical", string> = {
     ok: "bg-zinc-100 text-zinc-700 ring-1 ring-zinc-200",
     warning: "bg-amber-50 text-amber-800 ring-1 ring-amber-200",
-    critical: "bg-red-50 text-red-700 ring-1 ring-red-200 animate-pulse",
+    critical: "bg-red-600 text-white",
   };
 
   const answeredCount = questionsAnswered ?? answeredIds.length;
   const totalCount = questionsTotal ?? savollar.length;
   const progressPct = totalCount > 0 ? Math.min(100, Math.round((answeredCount / totalCount) * 100)) : 0;
+
+  const userFullName = useMemo(() => getStoredUserFullName(), []);
 
   if (!Number.isFinite(testId) || testId <= 0) {
     return (
@@ -440,13 +416,12 @@ export default function TestOtkazishPage() {
     );
   }
 
-  const userFullName = useMemo(() => getStoredUserFullName(), []);
-
   return (
-    <div className="space-y-5">
+    <div className="space-y-5 pb-24 sm:pb-0">
       {/* ─── Header ─── */}
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
+          {!attemptId ? (
           <Link
             href="/testlar"
             className="inline-flex items-center gap-1 text-sm font-medium text-emerald-700 transition hover:text-emerald-900"
@@ -456,6 +431,7 @@ export default function TestOtkazishPage() {
             </svg>
             Testlar
           </Link>
+          ) : null}
           <h2 className="mt-1.5 text-xl font-bold tracking-tight text-zinc-900 sm:text-2xl">
             {yuklanmoqda && !test ? (
               <span className="inline-block h-7 w-56 animate-pulse rounded-lg bg-zinc-200" aria-hidden />
@@ -471,23 +447,20 @@ export default function TestOtkazishPage() {
         <div className="flex shrink-0 flex-wrap items-center gap-2">
           {qolganSoniya != null && qolganSoniya > 0 && !timedOut ? (
             <span
-              className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-semibold tabular-nums transition-colors duration-700 ${timerClasses[timerUrgency!]}`}
-              aria-live="polite"
-              aria-atomic="true"
+              role="timer"
+              aria-label="Qolgan vaqt"
+              className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-base font-semibold tabular-nums transition-colors duration-700 ${timerClasses[timerUrgency!]}`}
             >
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="h-3.5 w-3.5 shrink-0" aria-hidden>
                 <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm.75-13a.75.75 0 00-1.5 0v5c0 .414.336.75.75.75h4a.75.75 0 000-1.5h-3.25V5z" clipRule="evenodd" />
               </svg>
+              <span className="text-xs font-medium opacity-80">Qolgan vaqt</span>
               {Math.floor(qolganSoniya / 60)}:{String(qolganSoniya % 60).padStart(2, "0")}
             </span>
           ) : null}
-          <button
-            type="button"
-            onClick={() => chiqishniBoshlash()}
-            className="rounded-lg border border-zinc-200 bg-white px-3 py-1.5 text-sm font-medium text-zinc-600 shadow-sm transition hover:border-zinc-300 hover:bg-zinc-50 hover:text-zinc-900"
-          >
-            Chiqish
-          </button>
+          <p className="sr-only" aria-live="assertive">
+            {qolganSoniya === 300 ? "5 daqiqa qoldi" : qolganSoniya === 60 ? "1 daqiqa qoldi" : ""}
+          </p>
         </div>
       </div>
 
@@ -495,7 +468,7 @@ export default function TestOtkazishPage() {
       {attemptId && totalCount > 0 && !yuklanmoqda ? (
         <div>
           <div className="mb-1.5 flex items-center justify-between text-xs">
-            <span className="font-medium text-zinc-500">Bajarildi</span>
+            <span className="font-medium text-zinc-500">Javob berilgan</span>
             <span className="tabular-nums font-semibold text-zinc-700">
               {answeredCount} / {totalCount}
             </span>
@@ -506,6 +479,9 @@ export default function TestOtkazishPage() {
               style={{ width: `${progressPct}%` }}
             />
           </div>
+          <p className="mt-2 text-sm text-zinc-500">
+            Yakunlashdan oldin istalgan savolga qaytib, javobni o&apos;zgartirishingiz mumkin.
+          </p>
         </div>
       ) : null}
 
@@ -528,8 +504,8 @@ export default function TestOtkazishPage() {
           <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="mt-0.5 h-4 w-4 shrink-0 text-red-500" aria-hidden>
             <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm.75-13a.75.75 0 00-1.5 0v5c0 .414.336.75.75.75h4a.75.75 0 000-1.5h-3.25V5z" clipRule="evenodd" />
           </svg>
-          <p className="text-red-900">
-            Vaqt tugadi. Urinish yopilgan bo&apos;lishi mumkin — natijalar sahifasini tekshiring.
+          <p className="text-red-900" role="status">
+            Vaqt tugadi. Saqlangan javoblaringiz yuborilmoqda…
           </p>
         </div>
       ) : null}
@@ -602,132 +578,122 @@ export default function TestOtkazishPage() {
           {joriySavol ? (
             <div className="rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm sm:p-6">
               {/* Question nav */}
-              <div className="mb-5 flex flex-wrap gap-1.5">
+              <div className="mb-2 flex flex-wrap gap-1.5">
                 {savollar.map((q, idx) => {
-                  const selected = draftTanlov[q.id] ?? tanlangan[q.id];
+                  const selected = tanlangan[q.id];
                   const active = joriySavol.id === q.id;
                   return (
                     <button
                       key={q.id}
                       type="button"
                       onClick={() => setCurrentQuestionId(q.id)}
-                      aria-label={`${idx + 1}-savol${selected != null ? " (javoblangan)" : ""}`}
-                      aria-pressed={active}
-                      className={`relative h-8 min-w-[2rem] rounded-lg px-2 text-xs font-semibold transition-all duration-150 ${
+                      aria-label={`${idx + 1}-savol${selected != null ? " (javob berilgan)" : ""}`}
+                      aria-current={active ? "step" : undefined}
+                      className={`h-10 min-w-10 rounded-lg px-2 text-xs font-semibold transition-colors duration-150 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-700 sm:h-8 sm:min-w-8 ${
                         active
                           ? "bg-emerald-700 text-white shadow-sm"
                           : selected != null
-                            ? "bg-emerald-100 text-emerald-800 hover:bg-emerald-200"
-                            : "bg-zinc-100 text-zinc-600 hover:bg-zinc-200 hover:text-zinc-900"
+                            ? "bg-white text-emerald-800 ring-1 ring-inset ring-emerald-600 hover:bg-emerald-50"
+                            : "bg-zinc-100 text-zinc-600 ring-1 ring-inset ring-zinc-200 hover:bg-zinc-200 hover:text-zinc-900"
                       }`}
                     >
                       {idx + 1}
-                      {selected != null && !active ? (
-                        <span className="absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full bg-emerald-500 ring-1 ring-white" aria-hidden />
-                      ) : null}
                     </button>
                   );
                 })}
               </div>
+              <p className="mb-5 text-xs text-zinc-500">Yashil chiziqli — javob berilgan</p>
 
               {/* Question text */}
-              <p className="text-[15px] font-medium leading-relaxed text-zinc-900">
-                {joriySavol.text}
+              <p className="text-sm font-medium text-zinc-500">
+                Savol {joriyIdx + 1} / {savollar.length}
               </p>
+              <h3 id="savol-matn" className="mt-1 text-lg font-semibold leading-snug text-zinc-900 sm:text-xl">
+                {joriySavol.text}
+              </h3>
 
               {/* Options */}
-              <ul className="mt-4 space-y-2">
+              <fieldset className="mt-4 space-y-2" aria-labelledby="savol-matn">
                 {joriySavol.options.map((opt) => {
-                  const tanlanganmi = joriyTanlov === opt.id;
-                  const disabled = timedOut || yuborilmoqda === joriySavol.id || !attemptId;
+                  const disabled = timedOut || !attemptId;
                   return (
-                    <li key={opt.id}>
-                      <button
-                        type="button"
+                    <label
+                      key={opt.id}
+                      className="flex cursor-pointer items-start gap-3 rounded-xl border border-zinc-200 px-4 py-3.5 text-[15px] text-zinc-700 transition-colors duration-150 hover:border-emerald-300 hover:bg-zinc-50 has-[:checked]:border-emerald-600 has-[:checked]:bg-emerald-50 has-[:checked]:font-medium has-[:checked]:text-emerald-950 has-[:focus-visible]:outline has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-2 has-[:focus-visible]:outline-emerald-700 has-[:disabled]:cursor-not-allowed has-[:disabled]:opacity-60"
+                    >
+                      <input
+                        type="radio"
+                        name={`savol-${joriySavol.id}`}
+                        checked={joriyTanlov === opt.id}
                         disabled={disabled}
-                        onClick={() => variantTanlash(joriySavol.id, opt.id)}
-                        className={`flex w-full items-start gap-3 rounded-xl border px-4 py-3 text-left text-sm transition-all duration-150 ${
-                          tanlanganmi
-                            ? "border-emerald-500 bg-emerald-50 ring-1 ring-emerald-500/40"
-                            : "border-zinc-200 hover:border-emerald-300 hover:bg-zinc-50"
-                        } disabled:cursor-not-allowed disabled:opacity-60`}
-                      >
-                        <span
-                          className={`mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full border-2 transition-colors duration-150 ${
-                            tanlanganmi ? "border-emerald-600 bg-emerald-600" : "border-zinc-300"
-                          }`}
-                          aria-hidden
-                        >
-                          {tanlanganmi ? (
-                            <span className="h-1.5 w-1.5 rounded-full bg-white" />
-                          ) : null}
-                        </span>
-                        <span className={tanlanganmi ? "font-medium text-emerald-950" : "text-zinc-700"}>
-                          {opt.text}
-                        </span>
-                      </button>
-                    </li>
+                        onChange={() => void variantTanlash(joriySavol.id, opt.id)}
+                        className="mt-1 h-4 w-4 shrink-0 accent-emerald-700"
+                      />
+                      <span>{opt.text}</span>
+                    </label>
                   );
                 })}
-              </ul>
+              </fieldset>
+              <p className="mt-2 min-h-5 text-sm" aria-live="polite">
+                {yuborilmoqda === joriySavol.id ? (
+                  <span className="text-zinc-500">Saqlanmoqda…</span>
+                ) : saqlashXatosi === joriySavol.id ? (
+                  <span className="text-red-700">Saqlanmadi — qayta tanlang</span>
+                ) : joriyTanlov != null ? (
+                  <span className="text-emerald-700">Javob saqlandi</span>
+                ) : null}
+              </p>
 
-              {/* Next question */}
-              <div className="mt-5 flex items-center gap-3">
+              {/* Navigation */}
+              <div className="mt-6 flex items-center justify-between gap-3 border-t border-zinc-100 pt-5">
                 <button
                   type="button"
-                  onClick={() => void keyingiSavol()}
-                  disabled={timedOut || !attemptId || yuborilmoqda === joriySavol.id}
-                  className="inline-flex items-center gap-2 rounded-xl bg-emerald-700 px-5 py-2.5 text-sm font-semibold text-white shadow-md shadow-emerald-900/15 transition hover:bg-emerald-600 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
+                  onClick={() => savolgaOtish(-1)}
+                  disabled={joriyIdx <= 0}
+                  className="rounded-xl border border-zinc-200 px-4 py-2.5 text-sm font-medium text-zinc-700 transition hover:bg-zinc-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
                 >
-                  {yuborilmoqda === joriySavol.id ? (
-                    <>
-                      <Spinner className="h-3.5 w-3.5 text-white" />
-                      Saqlanmoqda…
-                    </>
-                  ) : (
-                    "Keyingi savol"
-                  )}
+                  Oldingi savol
                 </button>
-                <span className="text-xs text-zinc-400">
-                  Javobsiz ham davom etishingiz mumkin
-                </span>
+                {joriyIdx < savollar.length - 1 ? (
+                  <button
+                    type="button"
+                    onClick={() => savolgaOtish(1)}
+                    className="rounded-xl bg-emerald-700 px-5 py-2.5 text-sm font-semibold text-white shadow-md shadow-emerald-900/15 transition hover:bg-emerald-600 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-700"
+                  >
+                    Keyingi savol
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={yakunlashniOchish}
+                    disabled={timedOut || !attemptId || yuborilmoqda != null}
+                    className="rounded-xl bg-emerald-700 px-5 py-2.5 text-sm font-semibold text-white shadow-md shadow-emerald-900/15 transition hover:bg-emerald-600 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    Javoblarni ko&apos;rib chiqish
+                  </button>
+                )}
               </div>
             </div>
-          ) : (
-            <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-5 py-4 text-sm font-medium text-emerald-900">
-              Barcha savollar javoblangan — testni yakunlang.
-            </div>
-          )}
+          ) : null}
 
           {/* Submit section */}
-          <div className="rounded-xl border border-zinc-200 bg-white px-5 py-4 shadow-sm">
+          <div className="rounded-2xl border border-zinc-200 bg-white px-5 py-4 shadow-sm">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
                 <p className="text-sm font-semibold text-zinc-800">Testni yakunlash</p>
-                {!barchaJavoblangan ? (
-                  <p className="mt-0.5 text-xs text-zinc-400">
-                    Barcha {totalCount} ta savolga javob tanlang
-                  </p>
-                ) : (
-                  <p className="mt-0.5 text-xs font-medium text-emerald-700">
-                    Barcha savollar javoblangan — yakunlashga tayyor
-                  </p>
-                )}
+                <p className={`mt-0.5 text-xs ${javobsizlar.length ? "text-zinc-500" : "font-medium text-emerald-700"}`}>
+                  {javobsizlar.length
+                    ? `${javobsizlar.length} ta savolga javob berilmagan`
+                    : "Barcha savollarga javob berilgan"}
+                </p>
               </div>
               <button
                 type="button"
-                disabled={!barchaJavoblangan || timedOut || yakunlanmoqda || !attemptId}
-                onClick={() => void yakunlash()}
+                disabled={timedOut || yakunlanmoqda || !attemptId || yuborilmoqda != null}
+                onClick={yakunlashniOchish}
                 className="inline-flex items-center gap-2 rounded-xl bg-emerald-700 px-5 py-2.5 text-sm font-semibold text-white shadow-md shadow-emerald-900/15 transition hover:bg-emerald-600 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
               >
-                {yakunlanmoqda ? (
-                  <>
-                    <Spinner className="h-3.5 w-3.5 text-white" />
-                    Yakunlanmoqda…
-                  </>
-                ) : (
-                  "Testni yakunlash"
-                )}
+                Testni yakunlash
               </button>
             </div>
           </div>
@@ -740,12 +706,8 @@ export default function TestOtkazishPage() {
           role="alert"
           aria-live="assertive"
           className="fixed inset-0 z-50 flex items-center justify-center bg-zinc-950/40 p-4 backdrop-blur-[2px]"
-          onClick={dismissNotification}
         >
-          <div
-            className="flex w-full max-w-sm flex-col items-center gap-4 rounded-2xl border border-amber-200 bg-white px-6 py-7 text-center shadow-2xl"
-            onClick={(e) => e.stopPropagation()}
-          >
+          <div className="flex w-full max-w-sm flex-col items-center gap-4 rounded-2xl border border-amber-200 bg-white px-6 py-7 text-center shadow-2xl">
             <div className="flex h-12 w-12 items-center justify-center rounded-full bg-amber-100">
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="h-6 w-6 text-amber-500" aria-hidden>
                 <path fillRule="evenodd" d="M9.401 3.003c1.155-2 4.043-2 5.197 0l7.355 12.748c1.154 2-.29 4.5-2.598 4.5H4.645c-2.309 0-3.752-2.5-2.598-4.5L9.4 3.003zM12 8.25a.75.75 0 01.75.75v3.75a.75.75 0 01-1.5 0V9a.75.75 0 01.75-.75zm0 8.25a1 1 0 100-2 1 1 0 000 2z" clipRule="evenodd" />
@@ -804,40 +766,61 @@ export default function TestOtkazishPage() {
         </div>
       ) : null}
 
-      {/* ─── Exit modal ─── */}
-      {chiqishModal ? (
+      {/* ─── Finish modal ─── */}
+      {yakunlashModal ? (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-zinc-950/50 p-4 backdrop-blur-[2px]"
           role="dialog"
           aria-modal="true"
-          aria-labelledby="chiqish-modal-title"
-          onClick={() => !yakunlanmoqda && setChiqishModal(false)}
+          aria-labelledby="yakunlash-modal-title"
+          onKeyDown={(e) => { if (e.key === "Escape" && !yakunlanmoqda) setYakunlashModal(false); }}
         >
-          <div
-            className="w-full max-w-sm rounded-2xl border border-zinc-200 bg-white p-6 shadow-2xl"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <h3 id="chiqish-modal-title" className="text-lg font-semibold text-zinc-900">
-              Testni yakunlash
+          <div className="w-full max-w-sm rounded-2xl border border-zinc-200 bg-white p-6 shadow-2xl">
+            <h3 id="yakunlash-modal-title" className="text-lg font-semibold text-zinc-900">
+              Testni yakunlaysizmi?
             </h3>
-            <p className="mt-2 text-sm leading-relaxed text-zinc-500">
-              Chiqish testni hozirgi holatda yakunlaydi: saqlangan javoblar yuboriladi.
-              Javob berilmagan savollar bo&apos;sh qolishi mumkin.
+            <p className="mt-2 text-sm text-zinc-600">
+              Javob berilgan:{" "}
+              <span className="font-semibold tabular-nums text-zinc-900">
+                {savollar.length - javobsizlar.length} / {savollar.length}
+              </span>
             </p>
+            {javobsizlar.length ? (
+              <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 p-3">
+                <p className="text-sm font-medium text-amber-900">Javob berilmagan savollar:</p>
+                <div className="mt-2 flex flex-wrap gap-1.5">
+                  {javobsizlar.map((q) => (
+                    <button
+                      key={q.id}
+                      type="button"
+                      onClick={() => { setCurrentQuestionId(q.id); setYakunlashModal(false); }}
+                      className="h-9 min-w-9 rounded-lg bg-white px-2 text-xs font-semibold text-amber-800 ring-1 ring-amber-300 transition hover:bg-amber-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber-600"
+                    >
+                      {q.raqam}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+            <p className="mt-3 text-sm text-zinc-500">
+              Yakunlangandan keyin javoblarni o&apos;zgartirib bo&apos;lmaydi.
+            </p>
+            {xato ? <p role="alert" className="mt-2 text-sm text-red-700">{xato}</p> : null}
             <div className="mt-5 flex gap-2.5">
               <button
                 type="button"
+                autoFocus
                 disabled={yakunlanmoqda}
-                onClick={() => setChiqishModal(false)}
-                className="flex-1 rounded-xl border border-zinc-200 px-4 py-2.5 text-sm font-medium text-zinc-700 transition hover:bg-zinc-50 disabled:opacity-50"
+                onClick={() => setYakunlashModal(false)}
+                className="flex-1 rounded-xl border border-zinc-200 px-4 py-2.5 text-sm font-medium text-zinc-700 transition hover:bg-zinc-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-700 disabled:opacity-50"
               >
-                Bekor qilish
+                Testga qaytish
               </button>
               <button
                 type="button"
-                disabled={yakunlanmoqda || timedOut}
-                onClick={() => void yakunlashHozirgiJavoblarBilan("istalgan")}
-                className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-emerald-700 px-4 py-2.5 text-sm font-semibold text-white shadow-md shadow-emerald-900/15 transition hover:bg-emerald-600 disabled:cursor-not-allowed disabled:opacity-50"
+                disabled={yakunlanmoqda || timedOut || yuborilmoqda != null}
+                onClick={() => void yakunlash()}
+                className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-emerald-700 px-4 py-2.5 text-sm font-semibold text-white shadow-md shadow-emerald-900/15 transition hover:bg-emerald-600 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {yakunlanmoqda ? (
                   <>
@@ -875,15 +858,16 @@ function CameraPreview({ stream }: { stream: MediaStream | null }) {
   if (!stream) return null;
 
   return (
-    <div className="fixed bottom-4 right-4 z-50 overflow-hidden rounded-xl shadow-lg ring-1 ring-zinc-900/10">
+    <div className="fixed bottom-3 right-3 z-20 overflow-hidden rounded-xl shadow-lg ring-1 ring-zinc-900/10 sm:bottom-4 sm:right-4">
       <video
         ref={videoRef}
         muted
         playsInline
-        className="h-28 w-40 object-cover bg-zinc-900"
+        className="h-20 w-28 object-cover bg-zinc-900 sm:h-28 sm:w-40"
         aria-label="Kamera ko'rinishi"
       />
-      <span className="absolute bottom-1 left-1 rounded bg-zinc-900/60 px-1.5 py-0.5 text-[10px] font-medium text-white">
+      <span className="absolute bottom-1 left-1 inline-flex items-center gap-1 rounded bg-zinc-900/60 px-1.5 py-0.5 text-[11px] font-medium text-white">
+        <span className="h-1.5 w-1.5 rounded-full bg-red-500" aria-hidden />
         Kamera
       </span>
     </div>
