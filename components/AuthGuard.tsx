@@ -13,7 +13,9 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
   );
 
   useEffect(() => {
-    if (!authed) {
+    // Gidratsiyada `authed` server snapshot (false) bo'ladi — sessionStorage'ni bevosita tekshiramiz,
+    // aks holda F5 / to'g'ridan-to'g'ri URL har doim "/" ga otib yuboradi.
+    if (!isClientAuthed()) {
       router.replace("/");
     }
   }, [authed, router]);

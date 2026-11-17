@@ -108,6 +108,8 @@ export function LoginPage() {
 
           <div className="rounded-2xl border border-zinc-200/80 bg-white p-6 shadow-xl shadow-zinc-200/50 sm:p-8">
             <form
+              // JS yuklanmasa ham login/parol URL'ga tushmasin
+              method="post"
               onSubmit={yuborish}
               className="space-y-5"
               noValidate
