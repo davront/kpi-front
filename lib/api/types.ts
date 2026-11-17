@@ -140,6 +140,7 @@ export type ApiAttemptDetail = ApiAttempt & {
 
 /** POST /api/attempts/<id>/session-events/ */
 export type AttemptSessionEventType =
+  | "page_unload"
   | "page_hidden"
   | "page_visible"
   | "window_blur"

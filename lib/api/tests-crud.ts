@@ -30,7 +30,7 @@ export async function createTest(
 export async function updateTest(
   testId: number,
   body: ApiTestUpsertPayload,
-  method: "PUT" | "PATCH" = "PATCH",
+  method: "PUT" | "PATCH" = "PUT",
 ): Promise<ApiTestDetail> {
   const err = validateTestUpsert(body);
   if (err) throw new Error(err);

@@ -1,9 +1,13 @@
 import { apiFetch, readApiError } from "@/lib/api/client";
 import { singleFlight } from "@/lib/api/request-single-flight";
+import { subscribeAuth } from "@/lib/auth-storage";
 import type { ApiMe } from "@/lib/api/types";
 
 const ME_CACHE_TTL_MS = 15_000;
 let meCache: { value: ApiMe; expiresAt: number } | null = null;
+// Kirish/chiqishda kesh boshqa foydalanuvchiga o'tmasin
+let authGen = 0;
+subscribeAuth(() => { meCache = null; authGen += 1; });
 
 /** FIO — `full_name` yoki familiya, ism, otasining ismi */
 export function formatMeFio(m: Pick<ApiMe, "full_name" | "first_name" | "last_name" | "middle_name" | "username">): string {
@@ -53,11 +57,12 @@ export function fetchMe(): Promise<ApiMe> {
   if (meCache && meCache.expiresAt > Date.now()) {
     return Promise.resolve(meCache.value);
   }
-  return singleFlight("GET /api/me/", async () => {
+  const gen = authGen;
+  return singleFlight(`GET /api/me/ #${gen}`, async () => {
     const res = await apiFetch("/api/me/", { method: "GET" });
     if (!res.ok) throw new Error(await readApiError(res));
     const data = (await res.json()) as ApiMe;
-    meCache = { value: data, expiresAt: Date.now() + ME_CACHE_TTL_MS };
+    if (gen === authGen) meCache = { value: data, expiresAt: Date.now() + ME_CACHE_TTL_MS };
     return data;
   });
 }

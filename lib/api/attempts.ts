@@ -1,4 +1,4 @@
-import { apiFetch, readApiError, unwrapList } from "@/lib/api/client";
+import { fetchAllPages } from "@/lib/api/client";
 import { singleFlight } from "@/lib/api/request-single-flight";
 import type { ApiAttempt } from "@/lib/api/types";
 
@@ -15,10 +15,5 @@ export function fetchAttempts(
     ? `/api/attempts/?${qs.toString()}`
     : "/api/attempts/";
   const key = `GET ${path}`;
-  return singleFlight(key, async () => {
-    const res = await apiFetch(path, { method: "GET" });
-    if (!res.ok) throw new Error(await readApiError(res));
-    const data: unknown = await res.json();
-    return unwrapList<ApiAttempt>(data);
-  });
+  return singleFlight(key, () => fetchAllPages<ApiAttempt>(path));
 }

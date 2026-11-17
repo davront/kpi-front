@@ -7,8 +7,11 @@ import {
   setTokens,
 } from "@/lib/auth-storage";
 
-let refreshInFlight: Promise<boolean> | null = null;
-let getInFlight = new Map<string, Promise<Response>>();
+/** rejected — refresh token yaroqsiz (400/401); error — tarmoq/5xx, tokenlar saqlanadi */
+type RefreshResult = "ok" | "rejected" | "error";
+
+let refreshInFlight: Promise<RefreshResult> | null = null;
+const getInFlight = new Map<string, Promise<Response>>();
 
 const proxyUrl = (path: string) => `/api/proxy${path.startsWith("/") ? path : `/${path}`}`;
 
@@ -36,9 +39,9 @@ async function fetchWithGetDedup(url: string, init: RequestInit): Promise<Respon
   return (await request).clone();
 }
 
-async function postRefresh(): Promise<boolean> {
+async function postRefresh(): Promise<RefreshResult> {
   const refresh = getRefreshToken();
-  if (!refresh) return false;
+  if (!refresh) return "rejected";
   if (refreshInFlight) return refreshInFlight;
 
   refreshInFlight = (async () => {
@@ -48,13 +51,14 @@ async function postRefresh(): Promise<boolean> {
         headers: { "Content-Type": "application/json", Accept: "application/json" },
         body: JSON.stringify({ refresh }),
       });
-      if (!res.ok) return false;
+      if (res.status === 400 || res.status === 401) return "rejected";
+      if (!res.ok) return "error";
       const data = (await res.json()) as TokenRefreshResponse;
-      if (!data.access) return false;
+      if (!data.access) return "error";
       setTokens(data.access, data.refresh);
-      return true;
+      return "ok";
     } catch {
-      return false;
+      return "error";
     } finally {
       refreshInFlight = null;
     }
@@ -94,8 +98,8 @@ export async function apiFetch(
   let res = await fetchWithGetDedup(proxyUrl(path), { ...rest, headers });
 
   if (res.status === 401 && auth && !_skipRefresh) {
-    const ok = await postRefresh();
-    if (ok) {
+    const result = await postRefresh();
+    if (result === "ok") {
       const retryHeaders = new Headers(headers);
       const newAccess = getAccessToken();
       if (newAccess) retryHeaders.set("Authorization", `Bearer ${newAccess}`);
@@ -103,9 +107,10 @@ export async function apiFetch(
         ...rest,
         headers: retryHeaders,
       });
-    } else {
+    } else if (result === "rejected") {
       clearClientAuth();
     }
+    // "error": vaqtinchalik nosozlik — tokenlarni o'chirmaymiz, asl 401 javobini qaytaramiz
   }
 
   return res;
@@ -135,6 +140,28 @@ export async function readApiError(res: Response): Promise<string> {
   } catch {
     return text;
   }
+}
+
+/** GET ro'yxat: DRF `next` bo'yicha barcha sahifalarni yig'adi. */
+// ponytail: hamma sahifa ketma-ket yuklanadi; ro'yxat juda katta bo'lsa — UI pagination.
+export async function fetchAllPages<T>(path: string): Promise<T[]> {
+  const items: T[] = [];
+  let next: string | null = path;
+  while (next) {
+    const res = await apiFetch(next, { method: "GET" });
+    if (!res.ok) throw new Error(await readApiError(res));
+    const data: unknown = await res.json();
+    items.push(...unwrapList<T>(data));
+    const nextUrl = (data as { next?: string | null } | null)?.next;
+    if (nextUrl) {
+      // Django sub-path ostida bo'lsa ham proxy uchun /api/... dan boshlanadi
+      const u = new URL(nextUrl);
+      next = `${u.pathname.slice(Math.max(0, u.pathname.indexOf("/api/")))}${u.search}`;
+    } else {
+      next = null;
+    }
+  }
+  return items;
 }
 
 export function unwrapList<T>(data: unknown): T[] {

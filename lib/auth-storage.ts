@@ -61,10 +61,19 @@ export function setTokens(access: string, refresh?: string): void {
   emitAuthChange();
 }
 
+/** Urinish holati kalitlari (ActiveAttemptGuard, testlar sahifasi) — chiqishda keyingi foydalanuvchiga o'tmasin */
+const ACTIVE_ATTEMPT = "active_attempt";
+const ATTEMPT_BOOTSTRAP_PREFIX = "attempt_bootstrap_";
+
 export function clearClientAuth(): void {
   sessionStorage.removeItem(ACCESS);
   sessionStorage.removeItem(REFRESH);
   sessionStorage.removeItem(USER);
+  sessionStorage.removeItem(ACTIVE_ATTEMPT);
+  for (let i = sessionStorage.length - 1; i >= 0; i--) {
+    const k = sessionStorage.key(i);
+    if (k?.startsWith(ATTEMPT_BOOTSTRAP_PREFIX)) sessionStorage.removeItem(k);
+  }
   emitAuthChange();
 }
 
