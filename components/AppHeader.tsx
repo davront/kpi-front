@@ -39,6 +39,7 @@ function UserAvatar({ name }: { name: string }) {
 
 export function AppHeader() {
   const pathname = usePathname();
+  const inTest = /^\/testlar\/\d+/.test(pathname ?? "");
   const router = useRouter();
   const [me, setMe] = useState<ApiMe | null>(null);
 
@@ -108,6 +109,8 @@ export function AppHeader() {
 
           {/* Nav + user */}
           <div className="flex items-center gap-1 sm:gap-2">
+            {/* Test topshirish sahifasida nav va chiqish yashiriladi: tasodifan chiqib ketmaslik uchun */}
+            {!inTest && (
             <nav className="flex items-center gap-0.5">
               {nav.map(({ href, label }) => {
                 const active = pathname === href;
@@ -115,7 +118,7 @@ export function AppHeader() {
                   <Link
                     key={href}
                     href={href}
-                    className={`rounded-lg px-3 py-1.5 text-sm font-medium transition-colors duration-150 ${
+                    className={`rounded-lg px-3 py-1.5 text-sm font-medium transition-colors duration-150 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-300 ${
                       active
                         ? "bg-white/10 text-white"
                         : "text-emerald-200/80 hover:bg-white/5 hover:text-white"
@@ -126,8 +129,9 @@ export function AppHeader() {
                 );
               })}
             </nav>
+            )}
 
-            <div className="mx-1 h-5 w-px bg-white/10" aria-hidden />
+            {!inTest && <div className="mx-1 h-5 w-px bg-white/10" aria-hidden />}
 
             {fio ? (
               <div className="flex items-center gap-2">
@@ -137,7 +141,7 @@ export function AppHeader() {
                     {fio}
                   </p>
                   {departmentLabel ? (
-                    <p className="max-w-[160px] truncate text-[10px] text-emerald-300/70">
+                    <p className="max-w-[160px] truncate text-[11px] text-emerald-200">
                       {departmentLabel}
                     </p>
                   ) : null}
@@ -145,13 +149,15 @@ export function AppHeader() {
               </div>
             ) : null}
 
-            <button
-              type="button"
-              onClick={chiqish}
-              className="rounded-lg px-2.5 py-1.5 text-sm font-medium text-emerald-200/70 transition-colors duration-150 hover:bg-white/5 hover:text-white"
-            >
-              Chiqish
-            </button>
+            {!inTest && (
+              <button
+                type="button"
+                onClick={chiqish}
+                className="rounded-lg px-2.5 py-1.5 text-sm font-medium text-emerald-200/70 transition-colors duration-150 hover:bg-white/5 hover:text-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-300"
+              >
+                Chiqish
+              </button>
+            )}
           </div>
         </div>
       </div>

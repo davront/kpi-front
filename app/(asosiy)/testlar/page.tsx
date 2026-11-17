@@ -123,9 +123,8 @@ export default function TestlarPage() {
     setLoadingMetaId(t.id);
     try {
       const detail = await fetchTestDetail(t.id);
-      const savollar = Array.isArray(detail.questions)
-        ? detail.questions.length
-        : inlineSavollar;
+      // Boshlashdan oldin detail savollarsiz keladi — sonini question_count dan olamiz
+      const savollar = detail.question_count ?? inlineSavollar;
       const daqiqa = pickMinutesFromTest(detail) ?? inlineDaqiqa;
       setMetaById((prev) => ({
         ...prev,
@@ -268,6 +267,11 @@ export default function TestlarPage() {
                         {t.description}
                       </p>
                     ) : null}
+                    {endIso ? (
+                      <p className="mt-1 text-xs text-zinc-500 sm:hidden">
+                        Tugashi: <time dateTime={endIso}>{formatDdMmYyyy(endIso)}</time>
+                      </p>
+                    ) : null}
                   </div>
 
                   <div className="flex shrink-0 items-center gap-4">
@@ -320,14 +324,11 @@ export default function TestlarPage() {
           onClick={() => { setActiveTooltipId(null); setModalXato(null); }}
         >
           <div
+            role="dialog"
+            aria-modal="true"
             className="w-full max-w-sm rounded-2xl border border-zinc-200 bg-white p-6 shadow-2xl shadow-zinc-900/20"
             onClick={(e) => e.stopPropagation()}
           >
-            {activeTest ? (
-              <p className="text-[11px] font-semibold uppercase tracking-[0.15em] text-emerald-700">
-                Test
-              </p>
-            ) : null}
             {userFullName ? (
               <p className="mt-1 text-sm text-zinc-500">
                 <span className="font-semibold text-zinc-800">{userFullName}</span>, siz quyidagi testni boshlashga tayyormisiz?
@@ -339,7 +340,7 @@ export default function TestlarPage() {
 
             <div className="mt-4 flex gap-4 rounded-xl bg-zinc-50 px-4 py-3 text-sm">
               <div className="flex-1">
-                <p className="text-xs font-medium text-zinc-400">Savollar</p>
+                <p className="text-xs font-medium text-zinc-500">Savollar</p>
                 <p className="mt-0.5 font-semibold text-zinc-800">
                   {metaById[activeTooltipId]?.savollar != null
                     ? metaById[activeTooltipId].savollar
@@ -350,7 +351,7 @@ export default function TestlarPage() {
               </div>
               <div className="w-px bg-zinc-200" />
               <div className="flex-1">
-                <p className="text-xs font-medium text-zinc-400">Vaqt</p>
+                <p className="text-xs font-medium text-zinc-500">Vaqt</p>
                 <p className="mt-0.5 font-semibold text-zinc-800">
                   {metaById[activeTooltipId]?.daqiqa != null
                     ? `${metaById[activeTooltipId].daqiqa} daq`

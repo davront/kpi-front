@@ -23,12 +23,21 @@ export function getAttemptTestTitle(a: ApiAttempt): string {
   return "Test";
 }
 
-export type UiAttemptStatus = "jarayonda" | "yakunlangan" | "bekor" | "noma'lum";
+export type UiAttemptStatus =
+  | "jarayonda"
+  | "yakunlangan"
+  | "vaqt_tugadi"
+  | "toxtatilgan"
+  | "bekor"
+  | "noma'lum";
 
 export function mapAttemptStatus(status: string): UiAttemptStatus {
   const s = status.toLowerCase();
+  /** backend: terminated — yorliq/ilova almashtirilgani uchun majburan tugatilgan, ball 0 */
+  if (s.includes("terminat")) return "toxtatilgan";
+  /** backend: timed_out — dedlayngacha yuborilgan javoblar baholangan */
   if (s.includes("timed_out") || s.includes("timeout") || s.includes("time_out"))
-    return "bekor";
+    return "vaqt_tugadi";
   if (s.includes("abandon") || s === "cancelled" || s === "canceled")
     return "bekor";
   if (s.includes("complete") || s === "done")

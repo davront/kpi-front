@@ -89,10 +89,6 @@ export function LoginPage() {
 
   return (
     <div className="relative flex min-h-svh flex-col bg-zinc-100">
-      <div
-        className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_120%_80%_at_50%_-20%,rgba(16,185,129,0.22),transparent)]"
-        aria-hidden
-      />
       <div className="relative flex flex-1 flex-col items-center justify-center px-4 py-10 sm:py-14">
         <div className="w-full max-w-[440px]">
           <div className="mb-8 text-center">
@@ -160,7 +156,6 @@ export function LoginPage() {
                   />
                   <button
                     type="button"
-                    tabIndex={-1}
                     onClick={() => setParolOchiq((v) => !v)}
                     disabled={yuklanmoqda}
                     className="absolute right-2 top-1/2 -translate-y-1/2 rounded-lg p-2 text-zinc-500 transition hover:bg-zinc-100 hover:text-zinc-800 disabled:opacity-50"

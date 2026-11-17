@@ -16,6 +16,8 @@ function statusLabel(s: UiAttemptStatus): string {
   switch (s) {
     case "jarayonda": return "Jarayonda";
     case "yakunlangan": return "Yakunlangan";
+    case "vaqt_tugadi": return "Vaqt tugadi";
+    case "toxtatilgan": return "To'xtatilgan";
     case "bekor": return "Bekor qilingan";
     default: return "Noma'lum";
   }
@@ -25,6 +27,8 @@ function statusClass(s: UiAttemptStatus): string {
   switch (s) {
     case "jarayonda": return "bg-sky-50 text-sky-700 ring-1 ring-inset ring-sky-200";
     case "yakunlangan": return "bg-emerald-50 text-emerald-700 ring-1 ring-inset ring-emerald-200";
+    case "vaqt_tugadi": return "bg-amber-50 text-amber-800 ring-1 ring-inset ring-amber-200";
+    case "toxtatilgan": return "bg-red-50 text-red-700 ring-1 ring-inset ring-red-200";
     case "bekor": return "bg-zinc-100 text-zinc-600 ring-1 ring-inset ring-zinc-200";
     default: return "bg-zinc-100 text-zinc-500 ring-1 ring-inset ring-zinc-200";
   }
@@ -43,7 +47,7 @@ function TableSkeleton() {
         <thead className="border-b border-zinc-100 bg-zinc-50/80">
           <tr>
             {["Test", "Foydalanuvchi", "Sana", "Ball", "%", "Holat"].map((h) => (
-              <th key={h} className="px-4 py-3 text-xs font-semibold uppercase tracking-[0.06em] text-zinc-400">
+              <th key={h} className="px-4 py-3 text-xs font-semibold uppercase tracking-[0.06em] text-zinc-500">
                 {h}
               </th>
             ))}
@@ -201,7 +205,9 @@ export default function NatijalarPage() {
               {rows.map((r) => {
                 const ui = mapAttemptStatus(r.status);
                 const pct = attemptScorePercent(r);
-                const rawScore = attemptRawScore(r);
+                // To'xtatilgan urinishda ball hisoblanmaydi — "—" ko'rsatamiz
+                const scoreHidden = ui === "jarayonda" || ui === "toxtatilgan";
+                const rawScore = scoreHidden ? null : attemptRawScore(r);
                 const finishedIso = r.finished_at ?? r.completed_at ?? null;
                 const startedIso = r.started_at ?? null;
                 return (
@@ -222,14 +228,14 @@ export default function NatijalarPage() {
                         <div className="flex flex-col gap-0.5">
                           {finishedIso ? (
                             <span>
-                              <span className="text-zinc-400">Yakunlangan: </span>
+                              <span className="text-zinc-500">Yakunlangan: </span>
                               <time className="tabular-nums" dateTime={finishedIso}>
                                 {formatDdMmYyyyHhMm(finishedIso)}
                               </time>
                             </span>
                           ) : null}
                           {startedIso ? (
-                            <span className="text-xs text-zinc-400">
+                            <span className="text-xs text-zinc-500">
                               <span>Boshlangan: </span>
                               <time className="tabular-nums" dateTime={startedIso}>
                                 {formatDdMmYyyyHhMm(startedIso)}
@@ -245,7 +251,7 @@ export default function NatijalarPage() {
                       {rawScore ?? <span className="text-zinc-400">—</span>}
                     </td>
                     <td className="px-4 py-3.5">
-                      {ui === "jarayonda" || pct == null ? (
+                      {scoreHidden || pct == null ? (
                         <span className="text-zinc-400">—</span>
                       ) : (
                         <div className="flex min-w-[4.5rem] flex-col gap-1">
