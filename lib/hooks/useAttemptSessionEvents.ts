@@ -39,9 +39,11 @@ export function useAttemptSessionEvents(
   const notifTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const terminatedRef = useRef(false);
   const onTerminatedRef = useRef(onTerminated);
-  onTerminatedRef.current = onTerminated;
   const onPageVisibleRef = useRef(onPageVisible);
-  onPageVisibleRef.current = onPageVisible;
+  useEffect(() => {
+    onTerminatedRef.current = onTerminated;
+    onPageVisibleRef.current = onPageVisible;
+  });
 
   const [notification, setNotification] = useState<SessionNotification | null>(null);
 
@@ -93,6 +95,17 @@ export function useAttemptSessionEvents(
 
       if (document.visibilityState === "hidden") {
         if (terminatedRef.current) return;
+        // Sahifa yangilanmoqda/yopilmoqda yoki shu yorliqda boshqa saytga o'tilmoqda:
+        // urinish to'xtatilmaydi, lekin kurator ko'rishi uchun page_unload qayd etiladi.
+        if (unloadingRef.current) {
+          void send({
+            event_type: "page_unload",
+            leave_count: leaveCountRef.current,
+            duration_away_ms: null,
+            meta: { visibilityState: document.visibilityState },
+          }, { keepalive: true });
+          return;
+        }
         leaveCountRef.current += 1;
         tabHiddenAtRef.current = Date.now();
         void send({
@@ -170,9 +183,25 @@ export function useAttemptSessionEvents(
       }, BLUR_DEFER_MS);
     };
 
+    // Yangilash/yopishda beforeunload va pagehide visibilitychange(hidden) dan oldin keladi.
+    // beforeunload bekor bo'lishi mumkin (yuklab olish, mailto:) — bayroq 1 s dan keyin o'chadi;
+    // pageshow — bfcache'dan qaytganda.
+    const unloadingRef = { current: false };
+    let unloadResetTimer: ReturnType<typeof setTimeout> | null = null;
+    const onBeforeUnload = () => {
+      unloadingRef.current = true;
+      if (unloadResetTimer != null) clearTimeout(unloadResetTimer);
+      unloadResetTimer = setTimeout(() => { unloadingRef.current = false; }, 1000);
+    };
+    const onPageHide = () => { unloadingRef.current = true; };
+    const onPageShow = () => { unloadingRef.current = false; };
+
     document.addEventListener("visibilitychange", onVisibilityChange);
     window.addEventListener("blur", onWindowBlur);
     window.addEventListener("focus", onWindowFocus);
+    window.addEventListener("beforeunload", onBeforeUnload);
+    window.addEventListener("pagehide", onPageHide);
+    window.addEventListener("pageshow", onPageShow);
 
     return () => {
       if (blurTimerRef.current != null) { clearTimeout(blurTimerRef.current); blurTimerRef.current = null; }
@@ -181,6 +210,10 @@ export function useAttemptSessionEvents(
       document.removeEventListener("visibilitychange", onVisibilityChange);
       window.removeEventListener("blur", onWindowBlur);
       window.removeEventListener("focus", onWindowFocus);
+      if (unloadResetTimer != null) clearTimeout(unloadResetTimer);
+      window.removeEventListener("beforeunload", onBeforeUnload);
+      window.removeEventListener("pagehide", onPageHide);
+      window.removeEventListener("pageshow", onPageShow);
     };
   }, [attemptId, active, showNotification]);
 

@@ -47,10 +47,12 @@ export function ActiveAttemptGuard() {
     if (!active) return;
 
     const testPath = `/testlar/${active.testId}`;
-    if (pathname.startsWith(testPath)) return; // уже на своём тесте
+    // точное совпадение: /testlar/1 не должен совпадать с /testlar/12
+    const onOwnTest = pathname === testPath || pathname.startsWith(`${testPath}/`);
+    if (onOwnTest) return; // уже на своём тесте
 
     // Юзер открыл другой тест вручную — не мешаем, сбрасываем активную попытку
-    const isOtherTest = /^\/testlar\/\d+/.test(pathname) && !pathname.startsWith(testPath);
+    const isOtherTest = /^\/testlar\/\d+/.test(pathname);
     if (isOtherTest) {
       clearActiveAttempt();
       return;
